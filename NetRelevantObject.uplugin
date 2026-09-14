@@ -1,0 +1,23 @@
+﻿{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "NetRelevantObject",
+	"Description": "",
+	"Category": "Other",
+	"CreatedBy": "CrazyDog",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "NetRelevantObject",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
