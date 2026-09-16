@@ -31,14 +31,38 @@ void UNetRelevantObject::PreDestroyFromReplication()
 	Super::PreDestroyFromReplication();
 }
 
+void UNetRelevantObject::OnControllerDestroyed(AActor* DestroyedActor)
+{
+	if (const auto Global = Cast<UNetRelevantGlobalComponent>(GetOuter()))
+	{
+		Global->RemoveNetRelevantObject(Id);
+	}
+}
+
 void UNetRelevantObject::NativeAuthorityBeginPlay()
 {
+	// Make sure the life cycle is sync with the owning player controller.
+	if (PlayerController)
+	{
+		PlayerController->OnDestroyed.AddDynamic(this, &UNetRelevantObject::OnControllerDestroyed);
+	}
+	
 	AuthorityBeginPlay();
 }
 
 void UNetRelevantObject::NativeAuthorityEndPlay()
 {
 	AuthorityEndPlay();
+}
+
+void UNetRelevantObject::NativeBeginPlay()
+{
+	BeginPlay();
+}
+
+void UNetRelevantObject::NativeEndPlay()
+{
+	EndPlay();
 }
 
 void UNetRelevantObject::NetBeginPlay()
@@ -52,7 +76,7 @@ void UNetRelevantObject::NetBeginPlay()
 			Global->LocalNetRelevantObjects.Add(Id, this);
 		}
 		
-		BeginPlay();
+		NativeBeginPlay();
 	}
 }
 
@@ -62,13 +86,18 @@ void UNetRelevantObject::NetEndPlay()
 	{
 		bIsBegunPlay = false;
 	
-		EndPlay();
+		NativeEndPlay();
 	
 		if (const auto Global = Cast<UNetRelevantGlobalComponent>(GetOuter()))
 		{
 			Global->LocalNetRelevantObjects.Remove(Id);
 		}
 	}
+}
+
+UNetRelevantGlobalComponent* UNetRelevantObject::GetOwnerComponent() const
+{
+	return Cast<UNetRelevantGlobalComponent>(GetOuter());
 }
 
 void UNetRelevantObject::AddNetGroup(const FName InGroupName)

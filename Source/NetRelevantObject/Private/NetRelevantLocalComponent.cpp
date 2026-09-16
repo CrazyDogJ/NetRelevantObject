@@ -77,7 +77,7 @@ void UNetRelevantLocalComponent::BeginPlay()
 		return;
 	}
 	
-	AddNetConditionGroup(FName("Global"));
+	AddNetConditionGroup(GLOBAL_GROUP);
 }
 
 void UNetRelevantLocalComponent::GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const

@@ -21,15 +21,27 @@ public:
 	
 	virtual bool IsSupportedForNetworking() const override { return true; }
 	virtual void GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const override;
-	
 	virtual void PreDestroyFromReplication() override;
+#if WITH_EDITOR
+	virtual bool ImplementsGetWorld() const override { return true; }
+#endif
+
+	UFUNCTION()
+	void OnControllerDestroyed(AActor* DestroyedActor);
 	
 	virtual void NativeAuthorityBeginPlay();
 	virtual void NativeAuthorityEndPlay();
-	virtual void NetBeginPlay();
-	virtual void NetEndPlay();
+	
+	virtual void NativeBeginPlay();
+	virtual void NativeEndPlay();
+	
+	void NetBeginPlay();
+	void NetEndPlay();
 	
 	bool GetIsRunning() const { return bIsBegunPlay; }
+	
+	UFUNCTION(BlueprintPure)
+	UNetRelevantGlobalComponent* GetOwnerComponent() const;
 	
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly)
 	void AddNetGroup(FName InGroupName);
@@ -51,6 +63,10 @@ public:
 	
 	UFUNCTION(BlueprintImplementableEvent)
 	void EndPlay();
+	
+	// Authority only player controller owner.
+	UPROPERTY(BlueprintReadOnly, VisibleAnywhere)
+	APlayerController* PlayerController;
 	
 	UPROPERTY(BlueprintReadOnly, VisibleAnywhere, ReplicatedUsing = OnRep_Id)
 	FGuid Id;

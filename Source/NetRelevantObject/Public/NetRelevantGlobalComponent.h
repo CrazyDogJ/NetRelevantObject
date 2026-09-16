@@ -39,8 +39,30 @@ public:
 	UFUNCTION(BlueprintCallable, DisplayName = "FindNetRelevantObject")
 	UNetRelevantObject* FindNetRelevantObject_BP(FGuid Id) const;
 	
+	template <class T>
+	T* AddNetRelevantObject(APlayerController* OwnerController, const FName GroupName)
+	{
+		static_assert(TIsDerivedFrom<T, UNetRelevantObject>::Value, "T must be a subclass of UNetRelevantObject!");
+		
+		if (!GetOwner()->HasAuthority())
+		{
+			return nullptr;
+		}
+	
+		// Create new object and set up.
+		T* NetObject = NewObject<T>(this);
+		AddNetRelevantObjectInternal(NetObject, OwnerController, GroupName);
+
+		return NetObject;
+	}
+	
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, meta=(DeterminesOutputType="ObjectClass"))
-	UNetRelevantObject* AddNetRelevantObject(TSubclassOf<UNetRelevantObject> ObjectClass, FName GroupName);
+	UNetRelevantObject* AddNetRelevantObject(TSubclassOf<UNetRelevantObject> ObjectClass, APlayerController* OwnerController, FName GroupName);
+	
+	void AddNetRelevantObjectInternal(UNetRelevantObject* NetObject, APlayerController* OwnerController, FName GroupName);
+	
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly)
+	void BeginObjectLogic(UNetRelevantObject* NetObject);
 	
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly)
 	void RemoveNetRelevantObject(FGuid Id);

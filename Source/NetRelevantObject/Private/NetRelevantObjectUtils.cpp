@@ -260,6 +260,21 @@ void UNetRelevantObjectFunctionLibrary::ClearNetGroups(UObject* Object)
 	}
 }
 
+void UNetRelevantObjectFunctionLibrary::CopyNetGroups(UObject* Object, const APlayerController* InPlayerController)
+{
+	if (!InPlayerController || !Object)
+	{
+		return;
+	}
+	
+	const TArrayView<FName> PCNetGroups = GetPlayerNetGroups(InPlayerController);
+	if (const auto Manager = GetNetConditionGroupManager(Object))
+	{
+		Manager->UnregisterSubObjectFromAllGroups(Object);
+		Manager->RegisterSubObjectInMultipleGroups(Object, PCNetGroups);
+	}
+}
+
 void UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(UObject* Object)
 {
 	if (!Object)
@@ -311,14 +326,23 @@ void UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(const APlaye
 		{
 			if (Object.Object)
 			{
-				const auto Groups = GetObjectNetGroupsView(Object.Object);
-				if (!CanPlayerReceiveSubobject(Groups, PCGroups))
+				const auto ObjectPC = Object.Object->PlayerController;
+				if (ObjectPC && ObjectPC == PC)
 				{
-					CallStopReplicationClientInternal(PC, Object.Object);
+					// If pc change groups, we copy this and still net replicating.
+					CopyNetGroups(Object.Object, Object.Object->PlayerController);
 				}
 				else
 				{
-					CallStartReplicationClientInternal(PC, Object.Object);
+					const auto Groups = GetObjectNetGroupsView(Object.Object);
+					if (!CanPlayerReceiveSubobject(Groups, PCGroups))
+					{
+						CallStopReplicationClientInternal(PC, Object.Object);
+					}
+					else
+					{
+						CallStartReplicationClientInternal(PC, Object.Object);
+					}
 				}
 			}
 		}

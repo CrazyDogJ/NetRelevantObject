@@ -63,7 +63,7 @@ UNetRelevantObject* UNetRelevantGlobalComponent::FindNetRelevantObject_BP(FGuid 
 	return nullptr;
 }
 
-UNetRelevantObject* UNetRelevantGlobalComponent::AddNetRelevantObject(const TSubclassOf<UNetRelevantObject> ObjectClass,
+UNetRelevantObject* UNetRelevantGlobalComponent::AddNetRelevantObject(const TSubclassOf<UNetRelevantObject> ObjectClass, APlayerController* OwnerController,
                                                                       const FName GroupName)
 {
 	if (!GetOwner()->HasAuthority())
@@ -73,20 +73,45 @@ UNetRelevantObject* UNetRelevantGlobalComponent::AddNetRelevantObject(const TSub
 	
 	// Create new object and set up.
 	const auto NetObject = NewObject<UNetRelevantObject>(this, ObjectClass);
+	AddNetRelevantObjectInternal(NetObject, OwnerController, GroupName);
+
+	return NetObject;
+}
+
+void UNetRelevantGlobalComponent::AddNetRelevantObjectInternal(UNetRelevantObject* NetObject, APlayerController* OwnerController, const FName GroupName)
+{
+	if (!NetObject)
+	{
+		return;
+	}
+	NetObject->PlayerController = OwnerController;
 	NetObject->Id = FGuid::NewGuid();
-	const FName Name = GroupName.IsNone() ? "Global" : GroupName;
+	if (NetObject->PlayerController)
+	{
+		UNetRelevantObjectFunctionLibrary::CopyNetGroups(NetObject, NetObject->PlayerController);
+	}
+	else
+	{
+		const FName Name = GroupName.IsNone() ? GLOBAL_GROUP : GroupName;
+		UNetRelevantObjectFunctionLibrary::AddObjectNetGroup(NetObject, Name);
+	}
 	
 	// Add object to replicating list.
 	NetRelevantObjects.AddObject(NetObject);
 	AddReplicatedSubObject(NetObject, COND_NetGroup);
-	UNetRelevantObjectFunctionLibrary::AddObjectNetGroup(NetObject, Name);
+}
+
+void UNetRelevantGlobalComponent::BeginObjectLogic(UNetRelevantObject* NetObject)
+{
+	if (!GetOwner()->HasAuthority())
+	{
+		return;
+	}
 	
 	// Call functions on authority server.
 	NetObject->NativeAuthorityBeginPlay();
 	// Begin play check.
 	UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(NetObject);
-
-	return NetObject;
 }
 
 void UNetRelevantGlobalComponent::RemoveNetRelevantObject(FGuid Id)

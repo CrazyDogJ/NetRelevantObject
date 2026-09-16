@@ -8,11 +8,13 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "NetRelevantObjectUtils.generated.h"
 
+#define GLOBAL_GROUP FName("Global")
+
 class UNetworkSubsystem;
 class UNetRelevantGlobalComponent;
 
 UCLASS()
-class UNetRelevantObjectFunctionLibrary : public UBlueprintFunctionLibrary
+class NETRELEVANTOBJECT_API UNetRelevantObjectFunctionLibrary : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 
@@ -47,6 +49,8 @@ public:
 	static void RemoveObjectNetGroup(UObject* Object, FName InGroupName);
 	
 	static void ClearNetGroups(UObject* Object);
+	
+	static void CopyNetGroups(UObject* Object, const APlayerController* InPlayerController);
 	
 	// For object.
 	static void CallReplicationChangeClient(UObject* Object);
