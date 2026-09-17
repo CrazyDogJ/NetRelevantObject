@@ -267,11 +267,17 @@ void UNetRelevantObjectFunctionLibrary::CopyNetGroups(UObject* Object, const APl
 		return;
 	}
 	
-	const TArrayView<FName> PCNetGroups = GetPlayerNetGroups(InPlayerController);
+	const auto PCNetGroups = GetPlayerNetGroups(InPlayerController);
 	if (const auto Manager = GetNetConditionGroupManager(Object))
 	{
 		Manager->UnregisterSubObjectFromAllGroups(Object);
-		Manager->RegisterSubObjectInMultipleGroups(Object, PCNetGroups);
+		for (const auto Name : PCNetGroups)
+		{
+			if (!Name.IsNone())
+			{
+				Manager->RegisterSubObjectInGroup(Object, Name);
+			}
+		}
 	}
 }
 
