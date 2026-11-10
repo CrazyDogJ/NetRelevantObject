@@ -44,7 +44,7 @@ void UNetRelevantObject::NativeAuthorityBeginPlay()
 	// Make sure the life cycle is sync with the owning player controller.
 	if (PlayerController)
 	{
-		PlayerController->OnDestroyed.AddDynamic(this, &UNetRelevantObject::OnControllerDestroyed);
+		PlayerController->OnDestroyed.AddUniqueDynamic(this, &UNetRelevantObject::OnControllerDestroyed);
 	}
 	
 	AuthorityBeginPlay();
@@ -52,6 +52,11 @@ void UNetRelevantObject::NativeAuthorityBeginPlay()
 
 void UNetRelevantObject::NativeAuthorityEndPlay()
 {
+	// 修复：提前移除对象时同步解除控制器销毁回调。
+	if (PlayerController)
+	{
+		PlayerController->OnDestroyed.RemoveDynamic(this, &UNetRelevantObject::OnControllerDestroyed);
+	}
 	AuthorityEndPlay();
 }
 
@@ -90,7 +95,11 @@ void UNetRelevantObject::NetEndPlay()
 	
 		if (const auto Global = Cast<UNetRelevantGlobalComponent>(GetOuter()))
 		{
-			Global->LocalNetRelevantObjects.Remove(Id);
+			// 修复：结束事件可能重入并重新启动对象，不抹去新的登记。
+			if (!bIsBegunPlay && Global->LocalNetRelevantObjects.FindRef(Id) == this)
+			{
+				Global->LocalNetRelevantObjects.Remove(Id);
+			}
 		}
 	}
 }

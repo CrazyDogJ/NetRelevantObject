@@ -5,6 +5,7 @@
 #include "NetRelevantObject.h"
 #include "NetRelevantObjectUtils.h"
 #include "Net/UnrealNetwork.h"
+#include "UObject/StrongObjectPtr.h"
 
 UNetRelevantGlobalComponent::UNetRelevantGlobalComponent()
 {
@@ -66,11 +67,14 @@ UNetRelevantObject* UNetRelevantGlobalComponent::FindNetRelevantObject_BP(FGuid 
 UNetRelevantObject* UNetRelevantGlobalComponent::AddNetRelevantObject(const TSubclassOf<UNetRelevantObject> ObjectClass, APlayerController* OwnerController,
                                                                       const FName GroupName)
 {
-	if (!GetOwner()->HasAuthority())
+	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
 		return nullptr;
 	}
 	
+	// 修复：未指定类或传入抽象类会导致 NewObject 断言。
+	if (!ObjectClass || ObjectClass->HasAnyClassFlags(CLASS_Abstract)) return nullptr;
+
 	// Create new object and set up.
 	const auto NetObject = NewObject<UNetRelevantObject>(this, ObjectClass);
 	AddNetRelevantObjectInternal(NetObject, OwnerController, GroupName);
@@ -103,20 +107,26 @@ void UNetRelevantGlobalComponent::AddNetRelevantObjectInternal(UNetRelevantObjec
 
 void UNetRelevantGlobalComponent::BeginObjectLogic(UNetRelevantObject* NetObject)
 {
-	if (!GetOwner()->HasAuthority())
+	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
 		return;
 	}
 	
+	// 修复：只启动当前组件中仍然注册的对象。
+	if (!IsValid(NetObject) || FindNetRelevantObject(NetObject->Id) != NetObject) return;
+
 	// Call functions on authority server.
 	NetObject->NativeAuthorityBeginPlay();
 	// Begin play check.
-	UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(NetObject);
+	if (FindNetRelevantObject(NetObject->Id) == NetObject)
+	{
+		UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(NetObject);
+	}
 }
 
 void UNetRelevantGlobalComponent::RemoveNetRelevantObject(FGuid Id)
 {
-	if (!GetOwner()->HasAuthority())
+	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
 		return;
 	}
@@ -124,10 +134,12 @@ void UNetRelevantGlobalComponent::RemoveNetRelevantObject(FGuid Id)
 	// Find object pointer.
 	if (const auto Found = NetRelevantObjects.FindObject(Id))
 	{
+		// 修复：先移出查找表，再执行可重入的蓝图结束事件，避免重复销毁。
+		TStrongObjectPtr<UNetRelevantObject> KeepAlive(Found);
+		NetRelevantObjects.RemoveObject(Id);
 		Found->NetEndPlay();
 		Found->NativeAuthorityEndPlay();
 		DestroyReplicatedSubObjectOnRemotePeers(Found);
+		UNetRelevantObjectFunctionLibrary::ClearNetGroups(Found);
 	}
-	
-	NetRelevantObjects.RemoveObject(Id);
 }

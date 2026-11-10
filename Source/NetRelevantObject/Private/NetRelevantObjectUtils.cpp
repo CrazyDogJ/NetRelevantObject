@@ -299,7 +299,8 @@ void UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(UObject* Obj
 		return;
 	}
 	
-	const auto SubObjectGroups = GetObjectNetGroupsView(Object);
+	// 修复：本地 RPC 可以同步执行蓝图并改变分组，跨回调使用独立副本。
+	const auto SubObjectGroups = GetObjectNetGroups(Object);
 	
 	for (FConstPlayerControllerIterator Iterator = World->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
@@ -328,26 +329,28 @@ void UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(const APlaye
 	const auto PCGroups = PC->GetNetConditionGroups();
 	if (Global)
 	{
-		for (const auto Object : Global->NetRelevantObjects.Objects)
+		// 修复：本地回调可移除复制对象，避免在可变数组上迭代。
+		const auto Snapshot = Global->GetPureNetRelevantObjects();
+		for (const auto NetObject : Snapshot)
 		{
-			if (Object.Object)
+			if (IsValid(NetObject) && Global->FindNetRelevantObject(NetObject->Id) == NetObject)
 			{
-				const auto ObjectPC = Object.Object->PlayerController;
+				const auto ObjectPC = NetObject->PlayerController;
 				if (ObjectPC && ObjectPC == PC)
 				{
 					// If pc change groups, we copy this and still net replicating.
-					CopyNetGroups(Object.Object, Object.Object->PlayerController);
+					CopyNetGroups(NetObject, NetObject->PlayerController);
 				}
 				else
 				{
-					const auto Groups = GetObjectNetGroupsView(Object.Object);
+					const auto Groups = GetObjectNetGroupsView(NetObject);
 					if (!CanPlayerReceiveSubobject(Groups, PCGroups))
 					{
-						CallStopReplicationClientInternal(PC, Object.Object);
+						CallStopReplicationClientInternal(PC, NetObject);
 					}
 					else
 					{
-						CallStartReplicationClientInternal(PC, Object.Object);
+						CallStartReplicationClientInternal(PC, NetObject);
 					}
 				}
 			}
