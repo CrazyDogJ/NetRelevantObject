@@ -3,6 +3,7 @@
 #include "NetRelevantFastArray.h"
 
 #include "NetRelevantObject.h"
+#include "NetRelevantLocalComponent.h"
 
 void FNetRelevantObjectArray::RebuildIndicesMapping()
 {
@@ -30,22 +31,20 @@ void FNetRelevantObjectArray::AddObject(UNetRelevantObject* InObject)
 		auto NewEntry = FNetRelevantObjectEntry(InObject);
 		const auto Index = Objects.Add(NewEntry);
 		IndicesMapping.Add(InObject->Id, Index);
-		MarkItemDirty(Objects[Index]);
 	}
 }
 
 void FNetRelevantObjectArray::RemoveObject(const FGuid Id)
 {
-	if (IndicesMapping.Contains(Id))
+	int32 Index;
+	if (IndicesMapping.RemoveAndCopyValue(Id, Index))
 	{
-		if (const auto FoundIndex = IndicesMapping.Find(Id))
+		Objects.RemoveAtSwap(Index, EAllowShrinking::No);
+		if (Objects.IsValidIndex(Index))
 		{
-			Objects.RemoveAt(*FoundIndex);
-			MarkArrayDirty();
+			IndicesMapping.FindChecked(Objects[Index].Object->Id) = Index;
 		}
 	}
-	
-	RebuildIndicesMapping();
 }
 
 UNetRelevantObject* FNetRelevantObjectArray::FindObject(const FGuid Id) const
@@ -59,4 +58,52 @@ UNetRelevantObject* FNetRelevantObjectArray::FindObject(const FGuid Id) const
 	}
 	
 	return nullptr;
+}
+
+bool FNetRelevantVisibleIds::SetVisible(FGuid Id, bool bVisible)
+{
+	if (bVisible)
+	{
+		if (Indices.Contains(Id)) return false;
+		const int32 Index = Items.AddDefaulted();
+		Items[Index].Id = Id;
+		Indices.Add(Id, Index);
+		MarkItemDirty(Items[Index]);
+	}
+	else
+	{
+		int32 Index;
+		if (!Indices.RemoveAndCopyValue(Id, Index)) return false;
+		Items.RemoveAtSwap(Index, EAllowShrinking::No);
+		if (Items.IsValidIndex(Index)) Indices.FindChecked(Items[Index].Id) = Index;
+		MarkArrayDirty();
+	}
+	return true;
+}
+
+void FNetRelevantVisibleIds::PreReplicatedRemove(TArrayView<int32> Removed, int32 FinalSize)
+{
+	for (int32 Index : Removed)
+	{
+		Indices.Remove(Items[Index].Id);
+		ChangedIds.Add(Items[Index].Id);
+	}
+}
+
+void FNetRelevantVisibleIds::PostReplicatedAdd(TArrayView<int32> Added, int32 FinalSize)
+{
+	for (int32 Index : Added)
+	{
+		Indices.Add(Items[Index].Id, Index);
+		ChangedIds.Add(Items[Index].Id);
+	}
+}
+
+void FNetRelevantVisibleIds::PostReplicatedReceive(const FPostReplicatedReceiveParameters& Params)
+{
+	const TArray<FGuid> Changes = MoveTemp(ChangedIds);
+	for (const FGuid& Id : Changes)
+	{
+		if (UNetRelevantLocalComponent* Local = Owner.Get()) Local->RefreshLocalPresentation(Id);
+	}
 }

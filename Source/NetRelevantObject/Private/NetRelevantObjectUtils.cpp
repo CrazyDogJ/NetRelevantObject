@@ -1,381 +1,226 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
 #include "NetRelevantObjectUtils.h"
 
 #include "NetRelevantGlobalComponent.h"
 #include "NetRelevantLocalComponent.h"
 #include "NetRelevantObject.h"
 #include "GameFramework/GameStateBase.h"
+#include "GameFramework/PlayerController.h"
 #include "Net/Subsystems/NetworkSubsystem.h"
 
-bool UNetRelevantObjectFunctionLibrary::CanPlayerReceiveSubobject(const TArrayView<const FName>& SubobjectGroups,
-                                                                  const TArray<FName>& PlayerGroups)
+#if UE_WITH_IRIS
+#include "Engine/Engine.h"
+#include "Iris/ReplicationSystem/ObjectReplicationBridge.h"
+#include "Iris/ReplicationSystem/ReplicationSystem.h"
+#include "Net/Iris/ReplicationSystem/ReplicationSystemUtil.h"
+#endif
+
+namespace
 {
-	for (const FName& PlayerGroup : PlayerGroups)
+bool IsGameplayGroup(FName Name)
+{
+	return !Name.IsNone() && !UE::Net::IsSpecialNetConditionGroup(Name) &&
+		!Name.ToString().StartsWith(TEXT("NetRelevantPrivate_"));
+}
+
+void SetObjectGroup(UObject* Object, FName Group, bool bMember)
+{
+	auto* Manager = UNetRelevantObjectFunctionLibrary::GetNetConditionGroupManager(Object);
+	if (!Manager || Manager->GetSubObjectNetConditionGroups(Object).Contains(Group) == bMember) return;
+	if (bMember) Manager->RegisterSubObjectInGroup(Object, Group);
+	else Manager->UnregisterSubObjectFromGroup(Object, Group);
+#if UE_WITH_IRIS
+	using namespace UE::Net;
+	FReplicationSystemUtil::ForEachReplicationSystem(GEngine, Object->GetWorld(), [&](UReplicationSystem* System)
 	{
-		if (SubobjectGroups.Contains(PlayerGroup))
+		if (!System->IsServer() || !System->GetReplicationBridge()) return;
+		const auto Handle = System->GetReplicationBridge()->GetReplicatedRefHandle(Object);
+		if (!Handle.IsValid()) return;
+		if (bMember)
 		{
-			return true;
+			System->AddToGroup(System->GetOrCreateSubObjectFilter(Group), Handle);
 		}
+		else
+		{
+			const auto Filter = System->GetSubObjectFilterGroupHandle(Group);
+			if (Filter.IsValid()) System->RemoveFromGroup(Filter, Handle);
+		}
+	});
+#endif
+}
+}
+
+bool UNetRelevantObjectFunctionLibrary::CanPlayerReceiveSubobject(const TArrayView<const FName>& SubobjectGroups,
+	const TArray<FName>& PlayerGroups)
+{
+	for (const FName Group : SubobjectGroups)
+	{
+		if (PlayerGroups.Contains(Group)) return true;
 	}
-	
 	return false;
 }
 
-UNetRelevantGlobalComponent* UNetRelevantObjectFunctionLibrary::GetNetRelevantGlobalComponent(
-	const UObject* WorldContextObject)
+UNetRelevantGlobalComponent* UNetRelevantObjectFunctionLibrary::GetNetRelevantGlobalComponent(const UObject* Context)
 {
-	if (!WorldContextObject)
-	{
-		return nullptr;
-	}
-	
-	if (const auto World = WorldContextObject->GetWorld())
-	{
-		if (const auto GS = World->GetGameState())
-		{
-			return GS->GetComponentByClass<UNetRelevantGlobalComponent>();
-		}
-	}
-	
-	return nullptr;
+	const UWorld* World = Context ? Context->GetWorld() : nullptr;
+	const AGameStateBase* GS = World ? World->GetGameState() : nullptr;
+	return GS ? GS->GetComponentByClass<UNetRelevantGlobalComponent>() : nullptr;
 }
 
-UNetworkSubsystem* UNetRelevantObjectFunctionLibrary::GetNetworkSubsystem(const UObject* WorldContextObject)
+UNetworkSubsystem* UNetRelevantObjectFunctionLibrary::GetNetworkSubsystem(const UObject* Context)
 {
-	if (!WorldContextObject)
-	{
-		return nullptr;
-	}
-	
-	if (const auto World = WorldContextObject->GetWorld())
-	{
-		return World->GetSubsystem<UNetworkSubsystem>();
-	}
-	
-	return nullptr;
+	return Context ? UWorld::GetSubsystem<UNetworkSubsystem>(Context->GetWorld()) : nullptr;
 }
 
-UE::Net::FNetConditionGroupManager* UNetRelevantObjectFunctionLibrary::GetNetConditionGroupManager(
-	const UObject* WorldContextObject)
+UE::Net::FNetConditionGroupManager* UNetRelevantObjectFunctionLibrary::GetNetConditionGroupManager(const UObject* Context)
 {
-	if (!WorldContextObject)
-	{
-		return nullptr;
-	}
-	
-	if (const auto NetSub = GetNetworkSubsystem(WorldContextObject))
-	{
-		return &NetSub->GetNetConditionGroupManager();
-	}
-	
-	return nullptr;
+	auto* Subsystem = GetNetworkSubsystem(Context);
+	return Subsystem ? &Subsystem->GetNetConditionGroupManager() : nullptr;
 }
 
-TArray<FName> UNetRelevantObjectFunctionLibrary::GetPlayerNetGroups(const APlayerController* InPlayerController)
+TArray<FName> UNetRelevantObjectFunctionLibrary::GetPlayerNetGroups(const APlayerController* PC)
 {
-	if (!InPlayerController)
-	{
-		return TArray<FName>();
-	}
-	
-	if (InPlayerController->HasAuthority())
-	{
-		return InPlayerController->GetNetConditionGroups();
-	}
-	
-	return TArray<FName>();
+	if (!PC || !PC->HasAuthority()) return {};
+	TArray<FName> Groups = PC->GetNetConditionGroups();
+	if (const auto* Local = PC->GetComponentByClass<UNetRelevantLocalComponent>())
+		Groups.RemoveSingleSwap(Local->GetPrivateGroup());
+	return Groups;
 }
 
-void UNetRelevantObjectFunctionLibrary::AddPlayerNetGroup(APlayerController* InPlayerController,
-	const FName InGroupName)
+void UNetRelevantObjectFunctionLibrary::AddPlayerNetGroup(APlayerController* PC, FName Group)
 {
-	if (!InPlayerController)
-	{
-		return;
-	}
-
-	if (InGroupName.IsNone())
-	{
-		return;
-	}
-	
-	if (InPlayerController->HasAuthority())
-	{
-		InPlayerController->IncludeInNetConditionGroup(InGroupName);
-	}
+	if (!PC || !PC->HasAuthority() || !IsGameplayGroup(Group) || PC->IsMemberOfNetConditionGroup(Group)) return;
+	PC->IncludeInNetConditionGroup(Group);
+	CallReplicationChangeClient(PC);
 }
 
-void UNetRelevantObjectFunctionLibrary::RemovePlayerNetGroup(APlayerController* InPlayerController,
-	const FName InGroupName)
+void UNetRelevantObjectFunctionLibrary::RemovePlayerNetGroup(APlayerController* PC, FName Group)
 {
-	if (!InPlayerController)
-	{
-		return;
-	}
-	
-	if (InGroupName.IsNone())
-	{
-		return;
-	}
-	
-	if (InPlayerController->HasAuthority())
-	{
-		InPlayerController->RemoveFromNetConditionGroup(InGroupName);
-	}
+	if (!PC || !PC->HasAuthority() || !IsGameplayGroup(Group) || !PC->IsMemberOfNetConditionGroup(Group)) return;
+	PC->RemoveFromNetConditionGroup(Group);
+	CallReplicationChangeClient(PC);
 }
 
-void UNetRelevantObjectFunctionLibrary::ClearPlayerNetGroups(APlayerController* InPlayerController)
+void UNetRelevantObjectFunctionLibrary::ClearPlayerNetGroups(APlayerController* PC)
 {
-	if (!InPlayerController)
-	{
-		return;
-	}
-	
-	if (InPlayerController->HasAuthority())
-	{
-		const auto Groups = InPlayerController->GetNetConditionGroups();
-		for (const auto Group : Groups)
-		{
-			InPlayerController->RemoveFromNetConditionGroup(Group);
-		}
-	}
+	if (!PC || !PC->HasAuthority()) return;
+	const auto Groups = GetPlayerNetGroups(PC);
+	if (Groups.IsEmpty()) return;
+	for (FName Group : Groups) PC->RemoveFromNetConditionGroup(Group);
+	CallReplicationChangeClient(PC);
 }
 
 bool UNetRelevantObjectFunctionLibrary::IsObjectHasAuthority(const UObject* Object)
 {
-	if (!Object)
-	{
-		return false;
-	}
-
-	if (const auto World = Object->GetWorld())
-	{
-		if (World->GetAuthGameMode())
-		{
-			return true;
-		}
-	}
-	
-	return false;
+	if (const auto* Owner = Object ? Object->GetTypedOuter<AActor>() : nullptr) return Owner->HasAuthority();
+	const UWorld* World = Object ? Object->GetWorld() : nullptr;
+	return World && World->GetAuthGameMode();
 }
 
 TArrayView<const FName> UNetRelevantObjectFunctionLibrary::GetObjectNetGroupsView(const UObject* Object)
 {
-	if (!Object)
+	if (IsObjectHasAuthority(Object))
 	{
-		return TArrayView<const FName>();
+		if (const auto* Manager = GetNetConditionGroupManager(Object))
+			return Manager->GetSubObjectNetConditionGroups(Object);
 	}
-
-	if (!IsObjectHasAuthority(Object))
-	{
-		return TArrayView<const FName>();
-	}
-	
-	if (const auto Manager = GetNetConditionGroupManager(Object))
-	{
-		return Manager->GetSubObjectNetConditionGroups(Object);
-	}
-	
-	return TArrayView<const FName>();
+	return {};
 }
 
 TArray<FName> UNetRelevantObjectFunctionLibrary::GetObjectNetGroups(const UObject* Object)
 {
-	if (!Object)
-	{
-		return TArray<FName>();
-	}
-	
-	if (!IsObjectHasAuthority(Object))
-	{
-		return TArray<FName>();
-	}
-	
-	const auto View = GetObjectNetGroupsView(Object);
-	return TArray<FName>(View);
+	return TArray<FName>(GetObjectNetGroupsView(Object));
 }
 
-void UNetRelevantObjectFunctionLibrary::AddObjectNetGroup(UObject* Object, FName InGroupName)
+void UNetRelevantObjectFunctionLibrary::AddObjectNetGroup(UObject* Object, FName Group)
 {
-	if (!Object)
-	{
-		return;
-	}
-	
-	if (InGroupName.IsNone())
-	{
-		return;
-	}
-	
-	if (!IsObjectHasAuthority(Object))
-	{
-		return;
-	}
-	
-	if (const auto Manager = GetNetConditionGroupManager(Object))
-	{
-		Manager->RegisterSubObjectInGroup(Object, InGroupName);
-	}
+	if (!IsObjectHasAuthority(Object) || !IsGameplayGroup(Group) || GetObjectNetGroupsView(Object).Contains(Group)) return;
+	SetObjectGroup(Object, Group, true);
+	CallReplicationChangeClient(Object);
 }
 
-void UNetRelevantObjectFunctionLibrary::RemoveObjectNetGroup(UObject* Object, FName InGroupName)
+void UNetRelevantObjectFunctionLibrary::RemoveObjectNetGroup(UObject* Object, FName Group)
 {
-	if (!Object)
-	{
-		return;
-	}
-	
-	if (InGroupName.IsNone())
-	{
-		return;
-	}
-	
-	if (!IsObjectHasAuthority(Object))
-	{
-		return;
-	}
-	
-	if (const auto Manager = GetNetConditionGroupManager(Object))
-	{
-		Manager->UnregisterSubObjectFromGroup(Object, InGroupName);
-	}
+	if (!IsObjectHasAuthority(Object) || !GetObjectNetGroupsView(Object).Contains(Group)) return;
+	SetObjectGroup(Object, Group, false);
+	CallReplicationChangeClient(Object);
 }
 
 void UNetRelevantObjectFunctionLibrary::ClearNetGroups(UObject* Object)
 {
-	if (!Object)
-	{
-		return;
-	}
-	
-	if (!IsObjectHasAuthority(Object))
-	{
-		return;
-	}
-	
-	if (const auto Manager = GetNetConditionGroupManager(Object))
-	{
-		Manager->UnregisterSubObjectFromAllGroups(Object);
-	}
+	const auto Groups = GetObjectNetGroups(Object);
+	if (Groups.IsEmpty()) return;
+	for (FName Group : Groups) SetObjectGroup(Object, Group, false);
+	CallReplicationChangeClient(Object);
 }
 
-void UNetRelevantObjectFunctionLibrary::CopyNetGroups(UObject* Object, const APlayerController* InPlayerController)
+void UNetRelevantObjectFunctionLibrary::CopyNetGroups(UObject* Object, const APlayerController* PC)
 {
-	if (!InPlayerController || !Object)
+	if (!PC || !PC->HasAuthority() || !IsObjectHasAuthority(Object)) return;
+	const auto Old = GetObjectNetGroups(Object);
+	const auto Desired = GetPlayerNetGroups(PC);
+	bool bChanged = false;
+	for (FName Group : Old)
 	{
-		return;
+		if (Desired.Contains(Group)) continue;
+		SetObjectGroup(Object, Group, false);
+		bChanged = true;
 	}
-	
-	const auto PCNetGroups = GetPlayerNetGroups(InPlayerController);
-	if (const auto Manager = GetNetConditionGroupManager(Object))
+	for (FName Group : Desired)
 	{
-		Manager->UnregisterSubObjectFromAllGroups(Object);
-		for (const auto Name : PCNetGroups)
-		{
-			if (!Name.IsNone())
-			{
-				Manager->RegisterSubObjectInGroup(Object, Name);
-			}
-		}
+		if (Old.Contains(Group)) continue;
+		SetObjectGroup(Object, Group, true);
+		bChanged = true;
 	}
+	if (bChanged) CallReplicationChangeClient(Object);
 }
 
 void UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(UObject* Object)
 {
-	if (!Object)
+	auto* NetObject = Cast<UNetRelevantObject>(Object);
+	if (!NetObject || !IsObjectHasAuthority(Object)) return;
+	// AddObject configures groups before registering the object. Only published IDs can need an update.
+	if (!NetObject->HasAuthorityLogicStarted()) return;
+	// A listen-server callback can remove an object or a player during reconciliation.
+	TArray<TWeakObjectPtr<UNetRelevantLocalComponent>> Locals;
+	for (auto It = Object->GetWorld()->GetPlayerControllerIterator(); It; ++It)
 	{
-		return;
-	}
-	
-	if (!IsObjectHasAuthority(Object))
-	{
-		return;
-	}
-	
-	const auto World = Object->GetWorld();
-	if (!World)
-	{
-		return;
-	}
-	
-	// 修复：本地 RPC 可以同步执行蓝图并改变分组，跨回调使用独立副本。
-	const auto SubObjectGroups = GetObjectNetGroups(Object);
-	
-	for (FConstPlayerControllerIterator Iterator = World->GetPlayerControllerIterator(); Iterator; ++Iterator)
-	{
-		if (APlayerController* PlayerActor = Iterator->Get())
+		if (auto* PC = It->Get())
 		{
-			if (!CanPlayerReceiveSubobject(SubObjectGroups, GetPlayerNetGroups(PlayerActor)))
-			{
-				CallStopReplicationClientInternal(PlayerActor, Object);
-			}
-			else
-			{
-				CallStartReplicationClientInternal(PlayerActor, Object);
-			}
+			if (auto* Local = PC->GetComponentByClass<UNetRelevantLocalComponent>()) Locals.Add(Local);
 		}
+	}
+	for (const auto& WeakLocal : Locals)
+	{
+		if (auto* Local = WeakLocal.Get()) Local->RefreshObjectVisibility(NetObject);
 	}
 }
 
 void UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(const APlayerController* PC)
 {
-	if (!PC)
+	if (!PC || !PC->HasAuthority()) return;
+	const auto* Global = GetNetRelevantGlobalComponent(PC);
+	auto* Local = PC->GetComponentByClass<UNetRelevantLocalComponent>();
+	if (!Global) return;
+	for (auto* Object : Global->GetPureNetRelevantObjects())
 	{
-		return;
-	}
-	
-	const auto Global = GetNetRelevantGlobalComponent(PC);
-	const auto PCGroups = PC->GetNetConditionGroups();
-	if (Global)
-	{
-		// 修复：本地回调可移除复制对象，避免在可变数组上迭代。
-		const auto Snapshot = Global->GetPureNetRelevantObjects();
-		for (const auto NetObject : Snapshot)
-		{
-			if (IsValid(NetObject) && Global->FindNetRelevantObject(NetObject->Id) == NetObject)
-			{
-				const auto ObjectPC = NetObject->PlayerController;
-				if (ObjectPC && ObjectPC == PC)
-				{
-					// If pc change groups, we copy this and still net replicating.
-					CopyNetGroups(NetObject, NetObject->PlayerController);
-				}
-				else
-				{
-					const auto Groups = GetObjectNetGroupsView(NetObject);
-					if (!CanPlayerReceiveSubobject(Groups, PCGroups))
-					{
-						CallStopReplicationClientInternal(PC, NetObject);
-					}
-					else
-					{
-						CallStartReplicationClientInternal(PC, NetObject);
-					}
-				}
-			}
-		}
+		if (!IsValid(Object) || Global->FindNetRelevantObject(Object->Id) != Object) continue;
+		if (Object->FollowsOwnerGroups() && Object->PlayerController == PC) CopyNetGroups(Object, PC);
+		if (IsValid(Local)) Local->RefreshObjectVisibility(Object);
 	}
 }
 
 void UNetRelevantObjectFunctionLibrary::CallStopReplicationClientInternal(const APlayerController* PC, UObject* Object)
 {
-	if (PC && Object)
+	if (PC)
 	{
-		if (const auto Local = PC->GetComponentByClass<UNetRelevantLocalComponent>())
-		{
-			Local->CallEndReplicationEventClient(Object);
-		}
+		if (auto* Local = PC->GetComponentByClass<UNetRelevantLocalComponent>()) Local->CallEndReplicationEventClient(Object);
 	}
 }
 
 void UNetRelevantObjectFunctionLibrary::CallStartReplicationClientInternal(const APlayerController* PC, UObject* Object)
 {
-	if (PC && Object)
+	if (PC)
 	{
-		if (const auto Local = PC->GetComponentByClass<UNetRelevantLocalComponent>())
-		{
-			Local->CallBeginReplicationEventClient(Object);
-		}
+		if (auto* Local = PC->GetComponentByClass<UNetRelevantLocalComponent>()) Local->CallBeginReplicationEventClient(Object);
 	}
 }

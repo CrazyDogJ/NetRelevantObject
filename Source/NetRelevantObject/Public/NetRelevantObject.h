@@ -39,6 +39,8 @@ public:
 	void NetEndPlay();
 	
 	bool GetIsRunning() const { return bIsBegunPlay; }
+	bool HasAuthorityLogicStarted() const { return bAuthorityLogicStarted; }
+	bool FollowsOwnerGroups() const { return bFollowOwnerGroups; }
 	
 	UFUNCTION(BlueprintPure)
 	UNetRelevantGlobalComponent* GetOwnerComponent() const;
@@ -75,5 +77,8 @@ public:
 	void OnRep_Id();
 	
 private:
+	friend class UNetRelevantGlobalComponent;
+	bool bAuthorityLogicStarted = false;
+	bool bFollowOwnerGroups = false;
 	bool bIsBegunPlay = false;
 };

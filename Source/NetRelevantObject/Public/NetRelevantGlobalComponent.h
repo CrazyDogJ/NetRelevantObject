@@ -23,10 +23,16 @@ public:
 	UPROPERTY(BlueprintReadOnly)
 	TMap<FGuid, UNetRelevantObject*> LocalNetRelevantObjects;
 	
-	UPROPERTY(Replicated)
+	// Authority registry. Minimap iterates Objects when updating pin transforms.
+	UPROPERTY(Transient)
 	FNetRelevantObjectArray NetRelevantObjects;
-	
-	virtual void GetLifetimeReplicatedProps(TArray<class FLifetimeProperty>& OutLifetimeProps) const override;
+
+	void RegisterReplica(UNetRelevantObject* Object);
+	void ForgetReplica(UNetRelevantObject* Object);
+	void RefreshLocalVisibility(FGuid Id);
+#if UE_WITH_IRIS && ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 7
+	virtual void OnReplicationStartedForIris(const FOnReplicationStartedParams& Params) override;
+#endif
 	
 	UNetRelevantObject* FindNetRelevantObject(FGuid Id) const;
 	
@@ -44,20 +50,16 @@ public:
 	{
 		static_assert(TIsDerivedFrom<T, UNetRelevantObject>::Value, "T must be a subclass of UNetRelevantObject!");
 		
-		if (!GetOwner()->HasAuthority())
-		{
-			return nullptr;
-		}
-	
-		// Create new object and set up.
-		T* NetObject = NewObject<T>(this);
-		AddNetRelevantObjectInternal(NetObject, OwnerController, GroupName);
-
-		return NetObject;
+		return Cast<T>(AddNetRelevantObject(T::StaticClass(), OwnerController, GroupName));
 	}
 	
+	// A named group is explicit. With None, an owned object is private and an unowned object uses Global.
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, meta=(DeterminesOutputType="ObjectClass"))
 	UNetRelevantObject* AddNetRelevantObject(TSubclassOf<UNetRelevantObject> ObjectClass, APlayerController* OwnerController, FName GroupName);
+
+	// For objects that should follow changes to the controller's gameplay groups.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, meta=(DeterminesOutputType="ObjectClass"))
+	UNetRelevantObject* AddNetRelevantObjectFollowingOwnerGroups(TSubclassOf<UNetRelevantObject> ObjectClass, APlayerController* OwnerController);
 	
 	void AddNetRelevantObjectInternal(UNetRelevantObject* NetObject, APlayerController* OwnerController, FName GroupName);
 	
@@ -66,4 +68,7 @@ public:
 	
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly)
 	void RemoveNetRelevantObject(FGuid Id);
+
+private:
+	TMap<FGuid, TWeakObjectPtr<UNetRelevantObject>> Replicas;
 };

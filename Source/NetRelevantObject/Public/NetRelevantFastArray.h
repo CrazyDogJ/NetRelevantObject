@@ -8,8 +8,9 @@
 #include "NetRelevantFastArray.generated.h"
 
 class UNetRelevantObject;
+class UNetRelevantLocalComponent;
 
-// Just avoid object gc.
+// Strong reference in the authority registry. This entry is never sent to clients.
 USTRUCT()
 struct NETRELEVANTOBJECT_API FNetRelevantObjectEntry : public FFastArraySerializerItem
 {
@@ -22,7 +23,7 @@ struct NETRELEVANTOBJECT_API FNetRelevantObjectEntry : public FFastArraySerializ
 	UNetRelevantObject*	Object = nullptr;
 };
 
-// Just avoid object gc.
+// Preserve the registry layout used by Minimap.
 USTRUCT()
 struct NETRELEVANTOBJECT_API FNetRelevantObjectArray: public FFastArraySerializer
 {
@@ -44,6 +45,47 @@ struct NETRELEVANTOBJECT_API FNetRelevantObjectArray: public FFastArraySerialize
 	{
 		return FFastArraySerializer::FastArrayDeltaSerialize<FNetRelevantObjectEntry, FNetRelevantObjectArray>(Objects, DeltaParms, *this);
 	}
+};
+
+USTRUCT()
+struct FNetRelevantVisibleId : public FFastArraySerializerItem
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FGuid Id;
+};
+
+USTRUCT()
+struct FNetRelevantVisibleIds : public FFastArraySerializer
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FNetRelevantVisibleId> Items;
+
+	bool SetVisible(FGuid Id, bool bVisible);
+	bool Contains(FGuid Id) const { return Indices.Contains(Id); }
+	bool NetDeltaSerialize(FNetDeltaSerializeInfo& Params)
+	{
+		return FastArrayDeltaSerialize<FNetRelevantVisibleId, FNetRelevantVisibleIds>(Items, Params, *this);
+	}
+	void PreReplicatedRemove(TArrayView<int32> Removed, int32 FinalSize);
+	void PostReplicatedAdd(TArrayView<int32> Added, int32 FinalSize);
+	void PostReplicatedReceive(const FFastArraySerializer::FPostReplicatedReceiveParameters& Params);
+
+	TWeakObjectPtr<UNetRelevantLocalComponent> Owner;
+
+private:
+	// Indices are used for swap removal on authority. Clients only query membership.
+	TMap<FGuid, int32> Indices;
+	TArray<FGuid> ChangedIds;
+};
+
+template<>
+struct TStructOpsTypeTraits<FNetRelevantVisibleIds> : TStructOpsTypeTraitsBase2<FNetRelevantVisibleIds>
+{
+	enum { WithNetDeltaSerializer = true };
 };
 
 template<>

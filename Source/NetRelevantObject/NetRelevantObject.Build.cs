@@ -7,6 +7,7 @@ public class NetRelevantObject : ModuleRules
 	public NetRelevantObject(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+		SetupIrisSupport(Target);
 		
 		PublicIncludePaths.AddRange(
 			new string[] {

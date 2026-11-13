@@ -26,6 +26,7 @@ void UNetRelevantObject::GetLifetimeReplicatedProps(TArray<class FLifetimeProper
 
 void UNetRelevantObject::PreDestroyFromReplication()
 {
+	if (auto* Global = GetOwnerComponent()) Global->ForgetReplica(this);
 	NetEndPlay();
 	
 	Super::PreDestroyFromReplication();
@@ -117,7 +118,6 @@ void UNetRelevantObject::AddNetGroup(const FName InGroupName)
 	}
 	
 	UNetRelevantObjectFunctionLibrary::AddObjectNetGroup(this, InGroupName);
-	UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(this);
 }
 
 void UNetRelevantObject::RemoveNetGroup(const FName InGroupName)
@@ -128,7 +128,6 @@ void UNetRelevantObject::RemoveNetGroup(const FName InGroupName)
 	}
 	
 	UNetRelevantObjectFunctionLibrary::RemoveObjectNetGroup(this, InGroupName);
-	UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(this);
 }
 
 void UNetRelevantObject::ClearNetGroups()
@@ -139,10 +138,12 @@ void UNetRelevantObject::ClearNetGroups()
 	}
 	
 	UNetRelevantObjectFunctionLibrary::ClearNetGroups(this);
-	UNetRelevantObjectFunctionLibrary::CallReplicationChangeClient(this);
 }
 
 void UNetRelevantObject::OnRep_Id()
 {
-	NetBeginPlay();
+	if (Id.IsValid())
+	{
+		if (auto* Global = GetOwnerComponent()) Global->RegisterReplica(this);
+	}
 }
